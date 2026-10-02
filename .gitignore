@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .DS_Store
 data/
+ssl/
+stitchforge_fills/
+stitchforge_jobs/
