@@ -1,9 +1,11 @@
 """End-to-end tests over the HTTP API (run with: pytest)."""
 import io
 import os
+import re
 import sys
 import tempfile
 
+import numpy as np
 import pytest
 from PIL import Image, ImageDraw
 
@@ -12,6 +14,7 @@ os.environ.setdefault('STITCHFORGE_DATA',
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi.testclient import TestClient
+import pystitch
 from app import app
 
 client = TestClient(app)
@@ -49,6 +52,23 @@ def test_digitize_report(image_job):
     assert rep['stitches'] > 200
     assert len(d['threads']) == 2
     assert d['threads'][0]['thread_name']
+
+
+def test_image_quantizer_supports_32_colors():
+    from digitizer import segment
+    colors = np.array([[i * 7 % 256, i * 13 % 256, i * 23 % 256, 255]
+                       for i in range(32)], dtype=np.int16)
+    rgba = np.repeat(colors[:, None, :], 20, axis=1)
+    layers = segment.quantize(rgba, 32, np.ones(rgba.shape[:2], dtype=bool))
+    assert len(layers) == 32
+
+
+def test_image_color_limit_is_validated():
+    r = client.post('/api/analyze',
+                    files={'image': ('t.png', _test_png(), 'image/png')},
+                    data={'colors': 33})
+    assert r.status_code == 400
+    assert r.json()['detail'] == 'colors must be between 1 and 32'
 
 
 def test_exports(image_job):
@@ -427,6 +447,44 @@ def test_production_worksheet():
     ps = worksheet.production_stats(_load_pattern(job))
     assert abs(ps['left_mm'] - 40) < 0.5 and abs(ps['down_mm'] - 40) < 0.5
     assert ps['max_stitch_mm'] > 0 and ps['thread_ft'] > ps['bobbin_ft'] > 0
+
+
+def test_worksheet_thread_lists_paginate(tmp_path, monkeypatch):
+    from inkstitchlib import worksheet
+    pattern = pystitch.EmbPattern()
+    layers = []
+    for index in range(40):
+        color = ((index * 47) % 256 << 16) | ((index * 83) % 256 << 8) | ((index * 131) % 256)
+        thread = pystitch.EmbThread()
+        thread.color = color
+        pattern.add_thread(thread)
+        if index:
+            pattern.color_change()
+        pattern.stitch_abs(index * 10, 0)
+        pattern.stitch_abs(index * 10 + 5, 5)
+        layers.append({'name': 'Colour %d' % (index + 1), 'hex': '#%06X' % color})
+
+    drawn = []
+    original_text = worksheet._text
+
+    def capture_text(canvas, x, y, text, *args, **kwargs):
+        drawn.append(str(text))
+        return original_text(canvas, x, y, text, *args, **kwargs)
+
+    monkeypatch.setattr(worksheet, '_text', capture_text)
+    report = {'stitches': 80, 'width_mm': 40, 'height_mm': 1,
+              'colour_changes': 39, 'travels': 0, 'trimmed': 0}
+
+    production = tmp_path / 'production.pdf'
+    worksheet.build(str(production), pattern, report, layers, layout='production')
+    assert '40.' in drawn
+    assert len(re.findall(rb'/Type\s*/Page\b', production.read_bytes())) == 2
+
+    drawn.clear()
+    classic = tmp_path / 'classic.pdf'
+    worksheet.build(str(classic), pattern, report, layers, layout='classic')
+    assert any(text.startswith('#40 ') for text in drawn)
+    assert len(re.findall(rb'/Type\s*/Page\b', classic.read_bytes())) >= 3
 
 
 def test_client_design_library():

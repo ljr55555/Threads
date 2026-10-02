@@ -4,6 +4,7 @@ import cv2
 from PIL import Image
 
 MAX_WORK_PX = 1400          # working raster; bigger only costs time
+MAX_COLORS = 32
 
 
 def load(path):
@@ -43,7 +44,7 @@ def quantize(rgba, n_colors, fg=None):
     pix = rgb[fg]
     if len(pix) < 16:
         raise ValueError('the image looks empty once the background is removed')
-    n_colors = int(max(1, min(n_colors, 8, len(np.unique(pix, axis=0)))))
+    n_colors = int(max(1, min(n_colors, MAX_COLORS, len(np.unique(pix, axis=0)))))
     crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.5)
     _, lbl, centers = cv2.kmeans(pix, n_colors, None, crit, 4,
                                  cv2.KMEANS_PP_CENTERS)

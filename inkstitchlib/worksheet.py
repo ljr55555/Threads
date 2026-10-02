@@ -444,6 +444,7 @@ def _production_page(c, pattern, report, layers, thread_matches, preview_png,
         _text(c, cols['Name'], y, _fit(c, name, name_w, body, fs), fs)
         _text(c, cols['Chart'], y, chart, fs, align='right')
         y -= lh
+    next_block = min(len(blocks), i + 1) if blocks else 0
     c.setStrokeColor(black)
     c.setLineWidth(0.8)
     c.line(col_x, y + lh - 3.5, x1, y + lh - 3.5)
@@ -455,6 +456,75 @@ def _production_page(c, pattern, report, layers, thread_matches, preview_png,
     _text(c, x0 + 150, fy, 'Design last saved : %s' % _stamp(saved_at or now), 7.5)
     _text(c, x0 + 345, fy, 'Date printed: %s' % _stamp(now), 7.5)
     _text(c, x1 - 3, fy, 'Page %d of %d' % (c.getPageNumber(), pages), 7.5, align='right')
+    return next_block
+
+
+def _production_stop_page(c, blocks, layers, thread_matches, start, design_name,
+                          client, saved_at, pages):
+    """Draw a full-width continuation page for the production stop sequence."""
+    W, H = letter
+    body = c._body
+    m = 0.22 * 72
+    x0, x1, y0, y1 = m, W - m, m, H - m
+    c.setStrokeColor(black)
+    c.setLineWidth(0.8)
+    c.rect(x0, y0, x1 - x0, y1 - y0)
+
+    _text(c, x0 + 8, y1 - 20, 'Production Worksheet', 12.5, bold=True, color=c._accent)
+    _text(c, x0 + 8, y1 - 35, design_name, 9)
+    _text(c, x0 + 8, y1 - 55, 'Stop Sequence (continued)', 10, bold=True)
+    c.line(x0, y1 - 64, x1, y1 - 64)
+
+    cols = {'#': x0 + 8, 'N#': x0 + 35, 'Color': x0 + 66, 'St.': x0 + 151,
+            'Code': x0 + 158, 'Name': x0 + 245, 'Chart': x1 - 8}
+    y = y1 - 82
+    for key, align in (('#', 'l'), ('N#', 'l'), ('Color', 'l'), ('St.', 'r'),
+                       ('Code', 'l'), ('Name', 'l'), ('Chart', 'r')):
+        _text(c, cols[key], y, key, 8, bold=True,
+              align='right' if align == 'r' else 'left')
+    c.line(x0 + 5, y - 4, x1 - 5, y - 4)
+    y -= 16
+
+    unique = []
+    for layer in layers:
+        if layer['hex'].upper() not in unique:
+            unique.append(layer['hex'].upper())
+    index = start
+    while index < len(blocks) and y >= y0 + 30:
+        block = blocks[index]
+        layer = layers[index] if index < len(layers) else {
+            'hex': '#888888', 'name': 'Colour %d' % (index + 1)}
+        needle = unique.index(layer['hex'].upper()) + 1 \
+            if layer['hex'].upper() in unique else index + 1
+        match = thread_matches[index] if thread_matches and index < len(thread_matches) else None
+        code = (match.get('thread_number') or '') if match else ''
+        name = (match.get('thread_name') if match else None) or layer.get('name', '')
+        chart = match.get('palette', 'Default') if match else 'Default'
+        fs = 7.5
+        if c.stringWidth(chart, body, fs) > 70:
+            chart = chart.split(' ')[0]
+        chart = _fit(c, chart, 70, body, fs)
+        name_w = cols['Chart'] - c.stringWidth(chart, body, fs) - cols['Name'] - 8
+
+        _text(c, cols['#'], y, '%d.' % (index + 1), 8)
+        _text(c, cols['N#'], y, str(needle), 8)
+        c.setFillColor(HexColor(layer['hex']))
+        c.setStrokeColor(black)
+        c.rect(cols['Color'], y - 2, 72, 9, fill=1)
+        _text(c, cols['St.'], y, '{:,}'.format(block['stitches']), fs, align='right')
+        _text(c, cols['Code'], y, _fit(c, code, 80, body, fs), fs)
+        _text(c, cols['Name'], y, _fit(c, name, name_w, body, fs), fs)
+        _text(c, cols['Chart'], y, chart, fs, align='right')
+        y -= 14
+        index += 1
+
+    c.line(x0 + 5, y + 10, x1 - 5, y + 10)
+    now = datetime.datetime.now()
+    _text(c, x0 + 3, y0 + 4, 'Authors:%s' % (('  ' + client) if client else ''), 7.5)
+    _text(c, x0 + 150, y0 + 4, 'Design last saved : %s' % _stamp(saved_at or now), 7.5)
+    _text(c, x1 - 3, y0 + 4, 'Page %d of %d' % (c.getPageNumber(), pages),
+          7.5, align='right')
+    return index
 
 
 def _quote_page(c, stitches, quote_params, design_name, client='', notes=''):
@@ -497,10 +567,17 @@ def build_production(path, pattern, report, layers, thread_matches=None,
     c = Canvas(path, pagesize=letter)
     c.setTitle('%s — production worksheet' % design_name)
     _apply_theme(c, theme, logo_path)
-    _production_page(c, pattern, report, layers, thread_matches, preview_png,
-                     design_name, client, saved_at, title=title,
-                     pages=2 if quote_params else 1)
+    blocks = block_stats(pattern)
+    continuation_pages = int(math.ceil(max(0, len(blocks) - 32) / 48.0))
+    pages = 1 + continuation_pages + (1 if quote_params else 0)
+    next_block = _production_page(c, pattern, report, layers, thread_matches, preview_png,
+                                  design_name, client, saved_at, title=title, pages=pages)
     c.showPage()
+    while next_block < len(blocks):
+        _apply_theme(c, theme, logo_path)
+        next_block = _production_stop_page(c, blocks, layers, thread_matches, next_block,
+                                           design_name, client, saved_at, pages)
+        c.showPage()
     if quote_params:
         _apply_theme(c, theme, logo_path)
         _quote_page(c, report.get('stitches', 0), quote_params, design_name)
@@ -582,6 +659,12 @@ def build(path, pattern, report, layers, thread_matches=None, preview_png=None,
     c.line(MARGIN, y, PAGE_W - MARGIN, y)
     y -= 16
     for i, L in enumerate(layers):
+        if y < MARGIN + 24:
+            _footer(c)
+            c.showPage()
+            _apply_theme(c, theme, logo_path)
+            _header(c, design_name, 'Thread sequence (continued)')
+            y = PAGE_H - MARGIN - 48
         c.setFillColor(HexColor(L['hex']))
         c.setStrokeColor(LINE)
         c.rect(MARGIN, y - 3, 8 * mm, 5 * mm, fill=1)

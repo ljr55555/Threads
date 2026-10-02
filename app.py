@@ -36,8 +36,13 @@ from inkstitchlib import ai_naming
 from inkstitchlib import density as density_map
 from inkstitchlib import presets, sketch as sketch_mod
 
-JOBS = os.path.join(tempfile.gettempdir(), 'stitchforge_jobs')
-os.makedirs(JOBS, exist_ok=True)
+#JOBS = os.path.join(tempfile.gettempdir(), 'stitchforge_jobs')
+#os.makedirs(JOBS, exist_ok=True)
+from pathlib import Path
+
+JOBS = Path(__file__).resolve().parent / "stitchforge_jobs"
+JOBS.mkdir(parents=True, exist_ok=True)
+
 
 app = FastAPI(title='StitchForge')
 
@@ -276,6 +281,8 @@ def studio():
 @app.post('/api/analyze')
 async def analyze(image: UploadFile = File(...), colors: int = Form(3)):
     """Separate the image into colour layers and report stroke widths."""
+    if not 1 <= colors <= segment.MAX_COLORS:
+        raise HTTPException(400, 'colors must be between 1 and %d' % segment.MAX_COLORS)
     job = uuid.uuid4().hex[:12]
     d = _job_dir(job, must_exist=False)
     os.makedirs(d, exist_ok=True)
@@ -315,6 +322,8 @@ async def digitize(job: str = Form(...), colors: int = Form(3),
                    cap_mode: bool = Form(False),
                    trim_dist: float = Form(2.0),
                    fabric: str = Form(''), machine: str = Form('')):
+    if not 1 <= colors <= segment.MAX_COLORS:
+        raise HTTPException(400, 'colors must be between 1 and %d' % segment.MAX_COLORS)
     d = _job_dir(job)
     src = None
     for fn in os.listdir(d):
@@ -796,8 +805,9 @@ def fills_list():
     return [{'id': k, 'name': patterns.FILL_LABELS[k]} for k in veclayers.FILL_METHODS]
 
 
-_FILL_PREVIEW_DIR = os.path.join(tempfile.gettempdir(), 'stitchforge_fills')
-
+#_FILL_PREVIEW_DIR = os.path.join(tempfile.gettempdir(), 'stitchforge_fills')
+_FILL_PREVIEW_DIR = Path(__file__).resolve().parent / "stitchforge_fills"
+_FILL_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
 
 @app.get('/api/fill_preview/{name}.png')
 def fill_preview(name: str):
